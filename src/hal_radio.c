@@ -22,10 +22,6 @@
 #define SCAN_DISABLE_PERIOD_CH 10
 #endif
 
-#ifndef SCAN_RADIO_2MBIT
-#define SCAN_RADIO_2MBIT 1
-#endif
-
 #if SCAN_RADIO_2MBIT
 #define RADIO_MODE_BLE ((RADIO_MODE_MODE_Ble_2Mbit) << RADIO_MODE_MODE_Pos)
 #else

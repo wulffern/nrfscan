@@ -29,10 +29,6 @@
 #define SCAN_DISABLE_PERIOD_CH 10
 #endif
 
-#ifndef SCAN_RADIO_2MBIT
-#define SCAN_RADIO_2MBIT 1
-#endif
-
 #define RTC_TICKS_PER_SEC 32768U
 #define RTC_COUNTER_MASK 0xFFFFFFU
 #define RTC_CC_CHANNEL 0

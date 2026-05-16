@@ -26,20 +26,22 @@ _BAR_HEIGHT_DEFAULT = 10
 _BAR_CEIL_DBM = -20
 _BAR_FLOOR_DBM = -90
 
-RSSI_CHANNELS = 40
+RSSI_CHANNELS_2M = 40
+RSSI_CHANNELS_1M = 80
 RSSI_FREQ_BASE_MHZ = 2400
-RSSI_FREQ_STEP_MHZ = 2
+RSSI_FREQ_STEP_2M = 2
+RSSI_FREQ_STEP_1M = 1
 # Terminal bar chart and plot use this many columns (1 MHz spacing at 80 bins).
 DISPLAY_COLUMNS = 80
 _RSSI_MIN = -127
 
 
-def channel_mhz(ch: int, step_mhz: int = RSSI_FREQ_STEP_MHZ) -> float:
+def channel_mhz(ch: int, step_mhz: int) -> float:
     """Match hal_radio.h: index ch -> 2400 + ch * step_mhz."""
     return RSSI_FREQ_BASE_MHZ + ch * step_mhz
 
 
-def channel_mhz_array(count: int = RSSI_CHANNELS, step_mhz: int = RSSI_FREQ_STEP_MHZ) -> np.ndarray:
+def channel_mhz_array(count: int, step_mhz: int) -> np.ndarray:
     return np.array([channel_mhz(ch, step_mhz) for ch in range(count)], dtype=float)
 
 
@@ -63,9 +65,9 @@ class ScanReport:
         self.filename: Optional[str] = None
         self.rssi_db: np.ndarray = np.array([], dtype=int)
         self.duration_us: int = -1
-        self.channels: int = RSSI_CHANNELS
+        self.channels: int = RSSI_CHANNELS_2M
         self.freq_base_mhz: int = RSSI_FREQ_BASE_MHZ
-        self.freq_step_mhz: int = RSSI_FREQ_STEP_MHZ
+        self.freq_step_mhz: int = RSSI_FREQ_STEP_2M
         self.scan_duration_us: int = -1
         self.interval_ms: int = -1
         self.scan_count: int = -1
@@ -116,14 +118,19 @@ class ScanReport:
         else:
             self.scan_duration_us = int(self.obj.get("duration_us", -1))
         self.duration_us = self.scan_duration_us
+        self.radio_2mbit = int(self.obj.get("radio_2mbit", -1))
         self.channels = int(self.obj.get("channels", len(self.rssi_db)))
         self.freq_base_mhz = int(self.obj.get("freq_base_mhz", RSSI_FREQ_BASE_MHZ))
         if "freq_step_mhz" in self.obj:
             self.freq_step_mhz = int(self.obj["freq_step_mhz"])
-        elif self.channels >= 80:
-            self.freq_step_mhz = 1
+        elif self.radio_2mbit == 1:
+            self.freq_step_mhz = RSSI_FREQ_STEP_2M
+        elif self.radio_2mbit == 0:
+            self.freq_step_mhz = RSSI_FREQ_STEP_1M
+        elif self.channels >= RSSI_CHANNELS_1M:
+            self.freq_step_mhz = RSSI_FREQ_STEP_1M
         else:
-            self.freq_step_mhz = RSSI_FREQ_STEP_MHZ
+            self.freq_step_mhz = RSSI_FREQ_STEP_2M
         if "interval_ms" in self.obj:
             self.interval_ms = int(self.obj["interval_ms"])
         elif "sleep_sec" in self.obj:
@@ -138,7 +145,6 @@ class ScanReport:
             self.scan_count = -1
         self.settle_us = int(self.obj.get("settle_us", -1))
         self.disable_period_ch = int(self.obj.get("disable_period_ch", -1))
-        self.radio_2mbit = int(self.obj.get("radio_2mbit", -1))
         self.time_hfclk_us = int(self.obj.get("time_hfclk_us", -1))
         self.time_ready_us = int(self.obj.get("time_ready_us", -1))
         self.time_disable_us = int(self.obj.get("time_disable_us", -1))
@@ -340,7 +346,7 @@ class ScanReport:
 class MaxHold:
     """Running maximum RSSI per frequency bin (e.g. during watch)."""
 
-    def __init__(self, n: int = RSSI_CHANNELS) -> None:
+    def __init__(self, n: int = RSSI_CHANNELS_2M) -> None:
         self.rssi = np.full(n, _RSSI_MIN, dtype=int)
         self.scan_at_max = np.full(n, -1, dtype=int)
 

@@ -4,12 +4,15 @@ BLE spectrum snapshot for nRF52833 DK.
 
 Once per second (default) the firmware:
 
-1. Starts HFCLK and sweeps **40** 2 MHz bins (`2400`–`2478` MHz, RADIO `FREQUENCY` 0, 2, … 78)
+1. Starts HFCLK and sweeps the 2.4 GHz band in **1 MHz** or **2 MHz** bins (see `SCAN_RADIO_2MBIT`)
 2. Records **RSSI** (dBm) per bin after a short settle (`SCAN_SETTLE_US`)
 3. Prints one JSON line on UART (115200, pins like [nrfdmiq initiator](../nrfdmiq/initiator/src/main.c): TX=6, RX=8)
 4. Sleeps until RTC2 **CC[0]** compare fires after `SCAN_INTERVAL_MS` (default 1 s)
 
-Each index `n` is **2400 + 2×n** MHz (40 bins across the 2.4 GHz band).
+| `SCAN_RADIO_2MBIT` | PHY | Channels | Step | MHz (index `n`) |
+|--------------------|-----|----------|------|-----------------|
+| 1 (default) | BLE 2 Mbps | 40 | 2 MHz | 2400 + 2×n → 2400…2478 |
+| 0 | BLE 1 Mbps | 80 | 1 MHz | 2400 + n → 2400…2479 |
 
 Per bin: `FREQUENCY` → `RXEN` → settle → `RSSISTART` (BLE **2 Mbps**).
 Wait for **READY** on bin 0 and every `SCAN_DISABLE_PERIOD_CH` bins after
@@ -29,8 +32,8 @@ Build-time options (also echoed in JSON):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SCAN_SETTLE_US` | 10 | µs after RXEN before RSSI |
-| `SCAN_DISABLE_PERIOD_CH` | 10 | `DISABLE`+`READY` every N bins (40 bins → 4 READY waits; was 2 → 20) |
-| `SCAN_RADIO_2MBIT` | 1 | 1 = BLE 2 Mbps, 0 = 1 Mbps |
+| `SCAN_DISABLE_PERIOD_CH` | 10 | `DISABLE`+`READY` every N bins |
+| `SCAN_RADIO_2MBIT` | 1 | 1 = 2 Mbps / 40×2 MHz bins; 0 = 1 Mbps / 80×1 MHz bins |
 | `SCAN_INTERVAL_MS` | 1000 | ms between sweeps |
 
 ```bash
@@ -57,11 +60,36 @@ Example (one line terminated with `\n\r` like initiator):
 | `time_final_disable_us` | Radio off after the last bin |
 | `time_other_us` | `scan_duration_us` minus the sum of the sweep phases above |
 | `count_ready` / `count_disable` | How often each path ran |
-| `channels` | Bin count (40) |
+| `channels` | Bin count (40 or 80) |
 | `freq_base_mhz` | First bin frequency (2400) |
-| `freq_step_mhz` | Spacing between bins (2) |
+| `freq_step_mhz` | Spacing between bins (1 or 2) |
+| `radio_2mbit` | Same as `SCAN_RADIO_2MBIT` build flag |
 | `interval_ms` | Time between scan starts (default 1000) |
 | `scan_count` | Increments each sweep |
+
+## Two-DK RSSI test (`tx/`)
+
+A minimal **carrier source** (`nrfscan_tx`, `TXEN` only — no packets) sweeps the same
+band as the scanner (**1 MHz** or **2 MHz** steps per `TX_RADIO_2MBIT`), **1 s** per channel.
+
+TX defaults to **BLE 1 Mbps** (`TX_RADIO_2MBIT=0`). Match the scanner PHY, e.g.
+`make build SCAN_RADIO_2MBIT=0` and `make tx-build TX_RADIO_2MBIT=0`.
+
+```bash
+# DK 1 — transmitter (no UART needed)
+make tx-build tx-flash
+
+# DK 2 — scanner (UART to host)
+make build flash
+python3 py/read_log.py watch --com /dev/tty.usbmodemXXXX
+```
+
+Override sweep range or step time:
+
+```bash
+make build SCAN_RADIO_2MBIT=0
+make tx-build TX_RADIO_2MBIT=0 TX_DWELL_MS=1000
+```
 
 ## Host
 

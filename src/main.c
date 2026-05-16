@@ -7,6 +7,7 @@
 #include <nrfx_uarte.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <zephyr/irq.h>
 
 #ifndef TXD_PIN
 #define TXD_PIN 6
@@ -14,10 +15,6 @@
 
 #ifndef RXD_PIN
 #define RXD_PIN 8
-#endif
-
-#ifndef SCAN_DWELL_US
-#define SCAN_DWELL_US 1
 #endif
 
 #ifndef SCAN_INTERVAL_MS
@@ -37,6 +34,20 @@
 #endif
 
 #define RTC_TICKS_PER_SEC 32768U
+#define RTC_COUNTER_MASK 0xFFFFFFU
+#define RTC_CC_CHANNEL 0
+
+static volatile bool rtc_compare_wake;
+
+static void rtc2_compare_isr(const void *arg);
+
+/* Waits for the next NVIC event. */
+static inline void cpu_wfe(void)
+{
+    __WFE();
+    __SEV();
+    __WFE();
+}
 
 static nrfx_uarte_t uart = NRFX_UARTE_INSTANCE(NRF_UARTE0);
 
@@ -107,9 +118,8 @@ static void int8_array_to_json(const char *key, const int8_t *array, uint32_t le
     uart_put_string("]");
 }
 
-static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t dwell_us, uint32_t scan_duration_us,
-                                uint32_t hfclk_us, const hal_radio_scan_timing_t *timing,
-                                uint32_t scan_count)
+static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t scan_duration_us, uint32_t hfclk_us,
+                                const hal_radio_scan_timing_t *timing, uint32_t scan_count)
 {
     const uint32_t sweep_accounted = timing->disable_us + timing->ready_us + timing->settle_us +
                                      timing->rssi_us + timing->final_disable_us;
@@ -117,8 +127,6 @@ static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t dwell_us, uint3
     uart_put_string("{");
     int8_array_to_json("rssi_dB", rssi_dbm, RSSI_CHANNEL_COUNT);
     uart_put_string(",");
-    int_to_json("dwell_us", (int)dwell_us);
-    uart_put_char(',');
     int_to_json("scan_duration_us", (int)scan_duration_us);
     uart_put_char(',');
     int_to_json("time_hfclk_us", (int)hfclk_us);
@@ -180,12 +188,12 @@ static void rtc_init(void)
     NRF_RTC2->PRESCALER = 0;
     NRF_RTC2->EVTENCLR = 0xFFFFFFFF;
     NRF_RTC2->INTENCLR = 0xFFFFFFFF;
+    NRF_RTC2->EVENTS_COMPARE[RTC_CC_CHANNEL] = 0;
     NRF_RTC2->TASKS_START = 1;
-}
 
-static uint32_t rtc_ticks(void)
-{
-    return NRF_RTC2->COUNTER;
+    rtc_compare_wake = false;
+    IRQ_CONNECT(RTC2_IRQn, 6, rtc2_compare_isr, NULL, 0);
+    irq_enable(RTC2_IRQn);
 }
 
 static uint32_t rtc_ms_to_ticks(uint32_t ms)
@@ -193,11 +201,49 @@ static uint32_t rtc_ms_to_ticks(uint32_t ms)
     return (RTC_TICKS_PER_SEC * ms) / 1000U;
 }
 
-static void rtc_wait_until(uint32_t target)
+static uint32_t rtc_ticks_delta(uint32_t from, uint32_t to)
 {
-    while ((int32_t)(rtc_ticks() - target) < 0) {
-        __WFE();
+    return (to - from) & RTC_COUNTER_MASK;
+}
+
+/** Arm CC[0] to fire after `ticks` LFCLK ticks (24-bit wrap-safe). */
+static void rtc_schedule_compare_after(uint32_t ticks)
+{
+    uint32_t now = NRF_RTC2->COUNTER;
+    uint32_t target = (now + ticks) & RTC_COUNTER_MASK;
+
+    /* If the compare point was already passed, push it forward. */
+    while (rtc_ticks_delta(now, target) > ticks) {
+        now = NRF_RTC2->COUNTER;
+        target = (now + ticks) & RTC_COUNTER_MASK;
     }
+
+    rtc_compare_wake = false;
+    NRF_RTC2->EVENTS_COMPARE[RTC_CC_CHANNEL] = 0;
+    NRF_RTC2->CC[RTC_CC_CHANNEL] = target;
+    NRF_RTC2->INTENSET = RTC_INTENSET_COMPARE0_Msk;
+}
+
+/** Sleep until RTC2 CC[0] compare interrupt sets rtc_compare_wake. */
+static void rtc_wait_compare(void)
+{
+    while (!rtc_compare_wake) {
+        cpu_wfe();
+    }
+    rtc_compare_wake = false;
+}
+
+static void rtc2_compare_isr(const void *arg)
+{
+    ARG_UNUSED(arg);
+
+    if (NRF_RTC2->EVENTS_COMPARE[RTC_CC_CHANNEL] == 0) {
+        return;
+    }
+
+    NRF_RTC2->EVENTS_COMPARE[RTC_CC_CHANNEL] = 0;
+    NRF_RTC2->INTENCLR = RTC_INTENCLR_COMPARE0_Msk;
+    rtc_compare_wake = true;
 }
 
 static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us, uint32_t *hfclk_us,
@@ -208,7 +254,7 @@ static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us, uint32_t *hfcl
     *hfclk_us = hal_time_us() - hfclk_start;
 
     const uint32_t scan_start = hal_time_us();
-    hal_radio_scan_rssi(rssi_dbm, SCAN_DWELL_US, timing);
+    hal_radio_scan_rssi(rssi_dbm, timing);
     *duration_us = hal_time_us() - scan_start;
     hal_clock_hfclk_stop();
 }
@@ -228,17 +274,16 @@ int main(void)
     const uint32_t interval_ticks = rtc_ms_to_ticks(SCAN_INTERVAL_MS);
 
     while (1) {
-        const uint32_t period_start = rtc_ticks();
         uint32_t duration_us = 0;
         uint32_t hfclk_us = 0;
         hal_radio_scan_timing_t timing;
 
         scan_count++;
         run_one_scan(rssi_dbm, &duration_us, &hfclk_us, &timing);
-        scan_report_to_json(rssi_dbm, SCAN_DWELL_US, duration_us, hfclk_us, &timing, scan_count);
+        scan_report_to_json(rssi_dbm, duration_us, hfclk_us, &timing, scan_count);
 
-        const uint32_t target = period_start + interval_ticks;
-        rtc_wait_until(target);
+        rtc_schedule_compare_after(interval_ticks);
+        rtc_wait_compare();
     }
 
     return 0;

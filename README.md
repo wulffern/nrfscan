@@ -5,9 +5,9 @@ BLE spectrum snapshot for nRF52833 DK.
 Once per second (default) the firmware:
 
 1. Starts HFCLK and sweeps **40** 2 MHz bins (`2400`–`2478` MHz, RADIO `FREQUENCY` 0, 2, … 78)
-2. Records the **maximum RSSI** (dBm) per bin during a short dwell time
+2. Records **RSSI** (dBm) per bin after a short settle (`SCAN_SETTLE_US`)
 3. Prints one JSON line on UART (115200, pins like [nrfdmiq initiator](../nrfdmiq/initiator/src/main.c): TX=6, RX=8)
-4. Waits on RTC2 until the next 1 s period (low-power `WFE` between scans)
+4. Sleeps until RTC2 **CC[0]** compare fires after `SCAN_INTERVAL_MS` (default 1 s)
 
 Each index `n` is **2400 + 2×n** MHz (40 bins across the 2.4 GHz band).
 
@@ -32,7 +32,6 @@ Build-time options (also echoed in JSON):
 | `SCAN_DISABLE_PERIOD_CH` | 10 | `DISABLE`+`READY` every N bins (40 bins → 4 READY waits; was 2 → 20) |
 | `SCAN_RADIO_2MBIT` | 1 | 1 = BLE 2 Mbps, 0 = 1 Mbps |
 | `SCAN_INTERVAL_MS` | 1000 | ms between sweeps |
-| `SCAN_DWELL_US` | 5 | legacy field in JSON |
 
 ```bash
 make build SCAN_DISABLE_PERIOD_CH=20 SCAN_RADIO_2MBIT=0 SCAN_SETTLE_US=10
@@ -43,13 +42,12 @@ make build SCAN_DISABLE_PERIOD_CH=20 SCAN_RADIO_2MBIT=0 SCAN_SETTLE_US=10
 Example (one line terminated with `\n\r` like initiator):
 
 ```json
-{"rssi_dB":[-96,-95,...],"dwell_us":400,"scan_duration_us":16000,"channels":40,"freq_base_mhz":2400,"freq_step_mhz":2,"interval_ms":1000,"scan_count":3}
+{"rssi_dB":[-96,-95,...],"scan_duration_us":16000,"channels":40,"freq_base_mhz":2400,"freq_step_mhz":2,"interval_ms":1000,"scan_count":3}
 ```
 
 | Field | Meaning |
 |-------|---------|
 | `rssi_dB` | Max RSSI per bin; MHz = `freq_base_mhz` + index × `freq_step_mhz` |
-| `dwell_us` | Listen time per bin |
 | `scan_duration_us` | RSSI sweep with HFCLK on (TIMER1, excludes HFCLK startup) |
 | `time_hfclk_us` | HFCLK startup before the sweep |
 | `time_ready_us` | Waiting for RADIO `READY` (first bin + each disable hop) |

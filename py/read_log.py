@@ -62,7 +62,6 @@ class ScanReport:
         self.obj: dict[str, Any] = obj or {}
         self.filename: Optional[str] = None
         self.rssi_db: np.ndarray = np.array([], dtype=int)
-        self.dwell_us: int = -1
         self.duration_us: int = -1
         self.channels: int = RSSI_CHANNELS
         self.freq_base_mhz: int = RSSI_FREQ_BASE_MHZ
@@ -112,7 +111,6 @@ class ScanReport:
 
     def load(self) -> None:
         self.rssi_db = np.array(self.obj["rssi_dB"], dtype=int)
-        self.dwell_us = int(self.obj.get("dwell_us", -1))
         if "scan_duration_us" in self.obj:
             self.scan_duration_us = int(self.obj["scan_duration_us"])
         else:
@@ -297,7 +295,6 @@ class ScanReport:
         table.add_column("value", justify="right")
         table.add_row("scan_count", str(self.scan_count))
         table.add_row("channels", str(self.channels))
-        table.add_row("dwell_us", str(self.dwell_us))
         table.add_row("scan_duration_us", str(self.scan_duration_us))
         table.add_row("interval_ms", str(self.interval_ms))
         table.add_row("settle_us", str(self.settle_us))
@@ -334,7 +331,7 @@ class ScanReport:
         ax.set_xlim(self.freq_base_mhz, self.freq_base_mhz + DISPLAY_COLUMNS - 1)
         ax.set_xlabel("Frequency [MHz]")
         ax.set_ylabel("RSSI [dBm]")
-        ax.set_title(title or f"scan={self.scan_count}  dwell={self.dwell_us} us")
+        ax.set_title(title or f"scan={self.scan_count}  {self.scan_duration_us} us")
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         plt.show()

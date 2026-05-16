@@ -3,15 +3,13 @@
 ######################################################################
 
 BOARD ?= nrf52833dk/nrf52833
-SCAN_DWELL_US ?= 1
 SCAN_INTERVAL_MS ?= 1000
-SCAN_SETTLE_US ?= 2
+SCAN_SETTLE_US ?= 1
 SCAN_DISABLE_PERIOD_CH ?= 20
 SCAN_RADIO_2MBIT ?= 1
 
 build:
 	west build -b $(BOARD) -- \
-		-DSCAN_DWELL_US=$(SCAN_DWELL_US) \
 		-DSCAN_INTERVAL_MS=$(SCAN_INTERVAL_MS) \
 		-DSCAN_SETTLE_US=$(SCAN_SETTLE_US) \
 		-DSCAN_DISABLE_PERIOD_CH=$(SCAN_DISABLE_PERIOD_CH) \
@@ -25,7 +23,7 @@ clean:
 
 # Print SCAN_* compile definitions from the last build (run after `make build`).
 config:
-	@grep -E 'SCAN_(DWELL|INTERVAL|SETTLE|DISABLE|RADIO)' build/nrfscan/build.ninja 2>/dev/null | head -5 || \
+	@grep -E 'SCAN_(INTERVAL|SETTLE|DISABLE|RADIO)' build/nrfscan/build.ninja 2>/dev/null | head -5 || \
 		echo "No build yet — run 'make build' first."
 
 .PHONY: build flash clean config

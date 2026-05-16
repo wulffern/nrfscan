@@ -24,6 +24,6 @@ void hal_clock_hfclk_stop(void);
 void hal_timer_init(void);
 uint32_t hal_time_us(void);
 void hal_radio_init(void);
-void hal_radio_scan_rssi(int8_t *rssi_dbm, uint32_t dwell_us, hal_radio_scan_timing_t *timing);
+void hal_radio_scan_rssi(int8_t *rssi_dbm, hal_radio_scan_timing_t *timing);
 
 #endif

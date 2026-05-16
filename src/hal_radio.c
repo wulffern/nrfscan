@@ -197,10 +197,8 @@ void hal_radio_init(void)
     NRF_RADIO->INTENCLR = 0xFFFFFFFF;
 }
 
-void hal_radio_scan_rssi(int8_t *rssi_dbm, uint32_t dwell_us, hal_radio_scan_timing_t *timing)
+void hal_radio_scan_rssi(int8_t *rssi_dbm, hal_radio_scan_timing_t *timing)
 {
-    (void)dwell_us;
-
     timing->disable_us = 0;
     timing->ready_us = 0;
     timing->settle_us = 0;

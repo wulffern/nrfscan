@@ -3,10 +3,10 @@
 ######################################################################
 
 BOARD ?= nrf52833dk/nrf52833
-SCAN_DWELL_US ?= 2
+SCAN_DWELL_US ?= 1
 SCAN_INTERVAL_MS ?= 1000
 SCAN_SETTLE_US ?= 2
-SCAN_DISABLE_PERIOD_CH ?= 10
+SCAN_DISABLE_PERIOD_CH ?= 20
 SCAN_RADIO_2MBIT ?= 1
 
 build:

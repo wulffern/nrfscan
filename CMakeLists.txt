@@ -8,7 +8,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(nrfscan)
 
 if(NOT DEFINED SCAN_DWELL_US)
-  set(SCAN_DWELL_US 400)
+  set(SCAN_DWELL_US 5)
 endif()
 if(NOT DEFINED SCAN_INTERVAL_MS)
   set(SCAN_INTERVAL_MS 1000)

@@ -17,7 +17,7 @@
 #endif
 
 #ifndef SCAN_DWELL_US
-#define SCAN_DWELL_US 400
+#define SCAN_DWELL_US 1
 #endif
 
 #ifndef SCAN_INTERVAL_MS

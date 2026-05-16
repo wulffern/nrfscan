@@ -3,7 +3,7 @@
 ######################################################################
 
 BOARD ?= nrf52833dk/nrf52833
-SCAN_DWELL_US ?= 400
+SCAN_DWELL_US ?= 5
 SCAN_INTERVAL_MS ?= 1000
 
 build:

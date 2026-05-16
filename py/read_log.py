@@ -23,6 +23,8 @@ from rich.text import Text
 console = Console()
 
 _BAR_HEIGHT_DEFAULT = 10
+_BAR_CEIL_DBM = -20
+_BAR_FLOOR_DBM = -90
 
 RSSI_CHANNELS = 80
 RSSI_FREQ_BASE_MHZ = 2400
@@ -124,6 +126,14 @@ class ScanReport:
         ch = int(np.argmax(self.rssi_db))
         return ch, int(self.rssi_db[ch]), channel_mhz(ch)
 
+    def _rssi_bar_level(self, dbm: float, height: int) -> int:
+        """Map dBm to bar row using fixed axis [_BAR_FLOOR_DBM, _BAR_CEIL_DBM]."""
+        clamped = max(_BAR_FLOOR_DBM, min(_BAR_CEIL_DBM, dbm))
+        span = _BAR_CEIL_DBM - _BAR_FLOOR_DBM
+        if height <= 1:
+            return 0
+        return int(round((clamped - _BAR_FLOOR_DBM) / span * (height - 1)))
+
     def print_bar_chart(self, height: int = _BAR_HEIGHT_DEFAULT) -> None:
         """Vertical bar chart in the terminal (one column per MHz bin)."""
         rssi = self.rssi_db
@@ -131,31 +141,30 @@ class ScanReport:
         if n == 0:
             return
 
-        lo = float(rssi.min())
-        hi = float(rssi.max())
-        span = hi - lo if hi > lo else 1.0
         peak_ch = int(np.argmax(rssi))
         height = max(4, height)
+        span = _BAR_CEIL_DBM - _BAR_FLOOR_DBM
 
         console.print(
             f"[bold]RSSI spectrum[/]  "
             f"scan={self.scan_count}  "
             f"[dim]{int(self.mhz[0])}–{int(self.mhz[-1])} MHz  "
-            f"{self.scan_duration_us} us[/]"
+            f"{self.scan_duration_us} us  "
+            f"axis {_BAR_CEIL_DBM}..{_BAR_FLOOR_DBM} dBm[/]"
         )
 
         for row in range(height - 1, -1, -1):
-            tick_dbm = lo + (row / (height - 1)) * span if height > 1 else lo
+            tick_dbm = _BAR_FLOOR_DBM + (row / (height - 1)) * span if height > 1 else _BAR_FLOOR_DBM
             line = Text(f"{tick_dbm:4.0f} │")
             for i in range(n):
                 v = float(rssi[i])
-                level = int(round((v - lo) / span * (height - 1))) if height > 1 else 0
+                level = self._rssi_bar_level(v, height)
                 if level >= row:
                     if i == peak_ch:
                         line.append("█", style="bold yellow")
-                    elif v >= hi - span * 0.2:
+                    elif v >= -35:
                         line.append("█", style="bold green")
-                    elif v >= hi - span * 0.45:
+                    elif v >= -50:
                         line.append("█", style="green")
                     else:
                         line.append("█", style="cyan")

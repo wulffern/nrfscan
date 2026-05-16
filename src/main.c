@@ -24,6 +24,18 @@
 #define SCAN_INTERVAL_MS 1000
 #endif
 
+#ifndef SCAN_SETTLE_US
+#define SCAN_SETTLE_US 10
+#endif
+
+#ifndef SCAN_DISABLE_PERIOD_CH
+#define SCAN_DISABLE_PERIOD_CH 10
+#endif
+
+#ifndef SCAN_RADIO_2MBIT
+#define SCAN_RADIO_2MBIT 1
+#endif
+
 #define RTC_TICKS_PER_SEC 32768U
 
 static nrfx_uarte_t uart = NRFX_UARTE_INSTANCE(NRF_UARTE0);
@@ -96,8 +108,12 @@ static void int8_array_to_json(const char *key, const int8_t *array, uint32_t le
 }
 
 static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t dwell_us, uint32_t scan_duration_us,
+                                uint32_t hfclk_us, const hal_radio_scan_timing_t *timing,
                                 uint32_t scan_count)
 {
+    const uint32_t sweep_accounted = timing->disable_us + timing->ready_us + timing->settle_us +
+                                     timing->rssi_us + timing->final_disable_us;
+
     uart_put_string("{");
     int8_array_to_json("rssi_dB", rssi_dbm, RSSI_CHANNEL_COUNT);
     uart_put_string(",");
@@ -105,9 +121,37 @@ static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t dwell_us, uint3
     uart_put_char(',');
     int_to_json("scan_duration_us", (int)scan_duration_us);
     uart_put_char(',');
+    int_to_json("time_hfclk_us", (int)hfclk_us);
+    uart_put_char(',');
+    int_to_json("time_ready_us", (int)timing->ready_us);
+    uart_put_char(',');
+    int_to_json("time_disable_us", (int)timing->disable_us);
+    uart_put_char(',');
+    int_to_json("time_settle_us", (int)timing->settle_us);
+    uart_put_char(',');
+    int_to_json("time_rssi_us", (int)timing->rssi_us);
+    uart_put_char(',');
+    int_to_json("time_final_disable_us", (int)timing->final_disable_us);
+    uart_put_char(',');
+    int_to_json("time_other_us", (int)(scan_duration_us - sweep_accounted));
+    uart_put_char(',');
+    int_to_json("count_ready", (int)timing->ready_count);
+    uart_put_char(',');
+    int_to_json("count_disable", (int)timing->disable_count);
+    uart_put_char(',');
     int_to_json("channels", RSSI_CHANNEL_COUNT);
     uart_put_char(',');
+    int_to_json("freq_base_mhz", RSSI_FREQ_BASE_MHZ);
+    uart_put_char(',');
+    int_to_json("freq_step_mhz", RSSI_FREQ_STEP_MHZ);
+    uart_put_char(',');
     int_to_json("interval_ms", SCAN_INTERVAL_MS);
+    uart_put_char(',');
+    int_to_json("settle_us", SCAN_SETTLE_US);
+    uart_put_char(',');
+    int_to_json("disable_period_ch", SCAN_DISABLE_PERIOD_CH);
+    uart_put_char(',');
+    int_to_json("radio_2mbit", SCAN_RADIO_2MBIT);
     uart_put_char(',');
     int_to_json("scan_count", (int)scan_count);
     uart_put_string("}\n\r");
@@ -156,11 +200,15 @@ static void rtc_wait_until(uint32_t target)
     }
 }
 
-static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us)
+static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us, uint32_t *hfclk_us,
+                         hal_radio_scan_timing_t *timing)
 {
+    const uint32_t hfclk_start = hal_time_us();
     hal_clock_hfclk_start();
-    uint32_t scan_start = hal_time_us();
-    hal_radio_scan_rssi(rssi_dbm, SCAN_DWELL_US);
+    *hfclk_us = hal_time_us() - hfclk_start;
+
+    const uint32_t scan_start = hal_time_us();
+    hal_radio_scan_rssi(rssi_dbm, SCAN_DWELL_US, timing);
     *duration_us = hal_time_us() - scan_start;
     hal_clock_hfclk_stop();
 }
@@ -182,10 +230,12 @@ int main(void)
     while (1) {
         const uint32_t period_start = rtc_ticks();
         uint32_t duration_us = 0;
+        uint32_t hfclk_us = 0;
+        hal_radio_scan_timing_t timing;
 
         scan_count++;
-        run_one_scan(rssi_dbm, &duration_us);
-        scan_report_to_json(rssi_dbm, SCAN_DWELL_US, duration_us, scan_count);
+        run_one_scan(rssi_dbm, &duration_us, &hfclk_us, &timing);
+        scan_report_to_json(rssi_dbm, SCAN_DWELL_US, duration_us, hfclk_us, &timing, scan_count);
 
         const uint32_t target = period_start + interval_ticks;
         rtc_wait_until(target);

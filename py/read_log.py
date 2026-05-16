@@ -26,17 +26,21 @@ _BAR_HEIGHT_DEFAULT = 10
 _BAR_CEIL_DBM = -20
 _BAR_FLOOR_DBM = -90
 
-RSSI_CHANNELS = 80
+RSSI_CHANNELS = 40
 RSSI_FREQ_BASE_MHZ = 2400
+RSSI_FREQ_STEP_MHZ = 2
+# Terminal bar chart and plot use this many columns (1 MHz spacing at 80 bins).
+DISPLAY_COLUMNS = 80
+_RSSI_MIN = -127
 
 
-def channel_mhz(ch: int) -> float:
-    """Match hal_radio.c: 1 MHz bins, FREQUENCY register 0..79 -> 2400..2479 MHz."""
-    return RSSI_FREQ_BASE_MHZ + ch
+def channel_mhz(ch: int, step_mhz: int = RSSI_FREQ_STEP_MHZ) -> float:
+    """Match hal_radio.h: index ch -> 2400 + ch * step_mhz."""
+    return RSSI_FREQ_BASE_MHZ + ch * step_mhz
 
 
-def channel_mhz_array(count: int = RSSI_CHANNELS) -> np.ndarray:
-    return np.array([channel_mhz(ch) for ch in range(count)], dtype=float)
+def channel_mhz_array(count: int = RSSI_CHANNELS, step_mhz: int = RSSI_FREQ_STEP_MHZ) -> np.ndarray:
+    return np.array([channel_mhz(ch, step_mhz) for ch in range(count)], dtype=float)
 
 
 def _normalize_line(raw: bytes) -> bytes:
@@ -61,9 +65,23 @@ class ScanReport:
         self.dwell_us: int = -1
         self.duration_us: int = -1
         self.channels: int = RSSI_CHANNELS
+        self.freq_base_mhz: int = RSSI_FREQ_BASE_MHZ
+        self.freq_step_mhz: int = RSSI_FREQ_STEP_MHZ
         self.scan_duration_us: int = -1
         self.interval_ms: int = -1
         self.scan_count: int = -1
+        self.settle_us: int = -1
+        self.disable_period_ch: int = -1
+        self.radio_2mbit: int = -1
+        self.time_hfclk_us: int = -1
+        self.time_ready_us: int = -1
+        self.time_disable_us: int = -1
+        self.time_settle_us: int = -1
+        self.time_rssi_us: int = -1
+        self.time_final_disable_us: int = -1
+        self.time_other_us: int = -1
+        self.count_ready: int = -1
+        self.count_disable: int = -1
         self.sleep_sec: int = -1
         self.wake_count: int = -1
 
@@ -101,6 +119,13 @@ class ScanReport:
             self.scan_duration_us = int(self.obj.get("duration_us", -1))
         self.duration_us = self.scan_duration_us
         self.channels = int(self.obj.get("channels", len(self.rssi_db)))
+        self.freq_base_mhz = int(self.obj.get("freq_base_mhz", RSSI_FREQ_BASE_MHZ))
+        if "freq_step_mhz" in self.obj:
+            self.freq_step_mhz = int(self.obj["freq_step_mhz"])
+        elif self.channels >= 80:
+            self.freq_step_mhz = 1
+        else:
+            self.freq_step_mhz = RSSI_FREQ_STEP_MHZ
         if "interval_ms" in self.obj:
             self.interval_ms = int(self.obj["interval_ms"])
         elif "sleep_sec" in self.obj:
@@ -113,20 +138,58 @@ class ScanReport:
             self.scan_count = int(self.obj["wake_count"])
         else:
             self.scan_count = -1
+        self.settle_us = int(self.obj.get("settle_us", -1))
+        self.disable_period_ch = int(self.obj.get("disable_period_ch", -1))
+        self.radio_2mbit = int(self.obj.get("radio_2mbit", -1))
+        self.time_hfclk_us = int(self.obj.get("time_hfclk_us", -1))
+        self.time_ready_us = int(self.obj.get("time_ready_us", -1))
+        self.time_disable_us = int(self.obj.get("time_disable_us", -1))
+        self.time_settle_us = int(self.obj.get("time_settle_us", -1))
+        self.time_rssi_us = int(self.obj.get("time_rssi_us", -1))
+        self.time_final_disable_us = int(self.obj.get("time_final_disable_us", -1))
+        self.time_other_us = int(self.obj.get("time_other_us", -1))
+        self.count_ready = int(self.obj.get("count_ready", -1))
+        self.count_disable = int(self.obj.get("count_disable", -1))
         self.sleep_sec = int(self.obj.get("sleep_sec", -1))
         self.wake_count = int(self.obj.get("wake_count", -1))
 
     @property
     def mhz(self) -> np.ndarray:
         n = len(self.rssi_db)
-        return channel_mhz_array(n)
+        return np.array(
+            [self.freq_base_mhz + ch * self.freq_step_mhz for ch in range(n)],
+            dtype=float,
+        )
 
     def peak(self) -> tuple[int, int, float]:
         """Return (channel, rssi_dBm, mhz) of strongest reading."""
         ch = int(np.argmax(self.rssi_db))
-        return ch, int(self.rssi_db[ch]), channel_mhz(ch)
+        return ch, int(self.rssi_db[ch]), float(self.mhz[ch])
 
-    def _rssi_bar_level(self, dbm: float, height: int) -> int:
+    def _display_cols_per_bin(self, n: Optional[int] = None) -> int:
+        n = len(self.rssi_db) if n is None else n
+        return max(1, DISPLAY_COLUMNS // n) if n else 1
+
+    def expand_rssi_for_display(self, rssi: np.ndarray) -> np.ndarray:
+        """Repeat each bin so the chart spans DISPLAY_COLUMNS (same width as 1 MHz / 80)."""
+        n = len(rssi)
+        if n == 0:
+            return np.array([], dtype=int)
+        k = self._display_cols_per_bin(n)
+        return np.repeat(rssi, k)[:DISPLAY_COLUMNS]
+
+    def mhz_at_display_col(self, col: int) -> float:
+        """1 MHz column index on the fixed-width axis (2400 + col for default span)."""
+        if DISPLAY_COLUMNS <= 1:
+            return float(self.freq_base_mhz)
+        end_mhz = self.freq_base_mhz + DISPLAY_COLUMNS - 1
+        return self.freq_base_mhz + col * (end_mhz - self.freq_base_mhz) / (DISPLAY_COLUMNS - 1)
+
+    def display_mhz_axis(self) -> np.ndarray:
+        return np.array([self.mhz_at_display_col(c) for c in range(DISPLAY_COLUMNS)], dtype=float)
+
+    @staticmethod
+    def _rssi_bar_level(dbm: float, height: int) -> int:
         """Map dBm to bar row using fixed axis [_BAR_FLOOR_DBM, _BAR_CEIL_DBM]."""
         clamped = max(_BAR_FLOOR_DBM, min(_BAR_CEIL_DBM, dbm))
         span = _BAR_CEIL_DBM - _BAR_FLOOR_DBM
@@ -134,40 +197,60 @@ class ScanReport:
             return 0
         return int(round((clamped - _BAR_FLOOR_DBM) / span * (height - 1)))
 
-    def print_bar_chart(self, height: int = _BAR_HEIGHT_DEFAULT) -> None:
-        """Vertical bar chart in the terminal (one column per MHz bin)."""
-        rssi = self.rssi_db
-        n = len(rssi)
-        if n == 0:
+    def print_bar_chart(
+        self,
+        height: int = _BAR_HEIGHT_DEFAULT,
+        max_hold: Optional[MaxHold] = None,
+        new_peaks: int = 0,
+    ) -> None:
+        """Vertical bar chart; optional ▲ marks session max per frequency."""
+        if len(self.rssi_db) == 0:
             return
 
-        peak_ch = int(np.argmax(rssi))
+        rssi = self.expand_rssi_for_display(self.rssi_db)
+        n = len(rssi)
+        peak_col = int(np.argmax(rssi))
+        peak_bin = min(peak_col // self._display_cols_per_bin(), len(self.rssi_db) - 1)
         height = max(4, height)
         span = _BAR_CEIL_DBM - _BAR_FLOOR_DBM
+        hold_rssi = None
+        if max_hold is not None:
+            hold_rssi = self.expand_rssi_for_display(max_hold.rssi)
 
-        console.print(
-            f"[bold]RSSI spectrum[/]  "
-            f"scan={self.scan_count}  "
+        title = (
+            f"[bold]RSSI spectrum[/]  scan={self.scan_count}  "
             f"[dim]{int(self.mhz[0])}–{int(self.mhz[-1])} MHz  "
-            f"{self.scan_duration_us} us  "
-            f"axis {_BAR_CEIL_DBM}..{_BAR_FLOOR_DBM} dBm[/]"
+            f"{self.scan_duration_us} us  axis {_BAR_CEIL_DBM}..{_BAR_FLOOR_DBM} dBm[/]"
         )
+        if max_hold is not None:
+            title += "  [dim]█ now  ▲ session max[/]"
+        console.print(title)
 
         for row in range(height - 1, -1, -1):
             tick_dbm = _BAR_FLOOR_DBM + (row / (height - 1)) * span if height > 1 else _BAR_FLOOR_DBM
             line = Text(f"{tick_dbm:4.0f} │")
             for i in range(n):
                 v = float(rssi[i])
-                level = self._rssi_bar_level(v, height)
-                if level >= row:
-                    if i == peak_ch:
+                cur_level = self._rssi_bar_level(v, height)
+                max_level = -1
+                is_session_max = False
+                if hold_rssi is not None and hold_rssi[i] > _RSSI_MIN:
+                    max_level = self._rssi_bar_level(float(hold_rssi[i]), height)
+                    is_session_max = v >= hold_rssi[i]
+
+                if cur_level >= row:
+                    if is_session_max and row == max_level:
                         line.append("█", style="bold yellow")
+                    elif i == peak_col:
+                        line.append("█", style="bold green")
                     elif v >= -35:
                         line.append("█", style="bold green")
                     elif v >= -50:
                         line.append("█", style="green")
                     else:
                         line.append("█", style="cyan")
+                elif hold_rssi is not None and max_level == row:
+                    line.append("▲", style="bold magenta")
                 else:
                     line.append(" ")
             console.print(line, highlight=False)
@@ -175,11 +258,9 @@ class ScanReport:
         axis = Text("     └" + "─" * n)
         console.print(axis, highlight=False)
 
-        # MHz labels under the chart (start, mid ticks, end)
         label_row = Text("      ")
-        ticks_mhz = [int(self.mhz[0]), int(self.mhz[n // 4]), int(self.mhz[n // 2]),
-                     int(self.mhz[3 * n // 4]), int(self.mhz[-1])]
         tick_cols = [0, n // 4, n // 2, 3 * n // 4, n - 1]
+        ticks_mhz = [int(self.mhz_at_display_col(c)) for c in tick_cols]
         pos = 0
         for col, mhz_val in zip(tick_cols, ticks_mhz):
             label = str(mhz_val)
@@ -189,13 +270,27 @@ class ScanReport:
             label_row.append(label, style="dim")
             pos += len(label)
         console.print(label_row, highlight=False)
-        console.print(
-            f"      [dim]peak {int(self.mhz[peak_ch])} MHz  "
-            f"{int(rssi[peak_ch])} dBm[/]",
-            highlight=False,
-        )
 
-    def print_summary(self, show_bars: bool = True, bar_height: int = _BAR_HEIGHT_DEFAULT) -> None:
+        footer = (
+            f"      [dim]now peak {int(self.mhz[peak_bin])} MHz  {int(self.rssi_db[peak_bin])} dBm[/]"
+        )
+        if max_hold is not None:
+            session_peak_bin = int(np.argmax(max_hold.rssi))
+            footer += (
+                f"  [magenta]▲ max {int(self.mhz[session_peak_bin])} MHz  "
+                f"{int(max_hold.rssi[session_peak_bin])} dBm[/]"
+            )
+            if new_peaks:
+                footer += f"  [dim]({new_peaks} bins new max)[/]"
+        console.print(footer, highlight=False)
+
+    def print_summary(
+        self,
+        show_bars: bool = True,
+        bar_height: int = _BAR_HEIGHT_DEFAULT,
+        max_hold: Optional[MaxHold] = None,
+        new_peaks: int = 0,
+    ) -> None:
         ch, rssi, mhz = self.peak()
         table = Table(title="nrfscan report", show_header=True)
         table.add_column("field", style="cyan")
@@ -205,6 +300,19 @@ class ScanReport:
         table.add_row("dwell_us", str(self.dwell_us))
         table.add_row("scan_duration_us", str(self.scan_duration_us))
         table.add_row("interval_ms", str(self.interval_ms))
+        table.add_row("settle_us", str(self.settle_us))
+        table.add_row("disable_period_ch", str(self.disable_period_ch))
+        table.add_row("radio_2mbit", str(self.radio_2mbit))
+        if self.time_hfclk_us >= 0:
+            table.add_row("time_hfclk_us", str(self.time_hfclk_us))
+            table.add_row("time_ready_us", str(self.time_ready_us))
+            table.add_row("time_disable_us", str(self.time_disable_us))
+            table.add_row("time_settle_us", str(self.time_settle_us))
+            table.add_row("time_rssi_us", str(self.time_rssi_us))
+            table.add_row("time_final_disable_us", str(self.time_final_disable_us))
+            table.add_row("time_other_us", str(self.time_other_us))
+            table.add_row("count_ready", str(self.count_ready))
+            table.add_row("count_disable", str(self.count_disable))
         table.add_row("peak channel", str(ch))
         table.add_row("peak MHz", f"{mhz:.0f}")
         table.add_row("peak rssi_dB", str(rssi))
@@ -213,22 +321,50 @@ class ScanReport:
         console.print(table)
         if show_bars:
             console.print()
-            self.print_bar_chart(height=bar_height)
+            self.print_bar_chart(height=bar_height, max_hold=max_hold, new_peaks=new_peaks)
 
     def plot(self, title: Optional[str] = None) -> None:
-        mhz = self.mhz
-        rssi = self.rssi_db
+        mhz = self.display_mhz_axis()
+        rssi = self.expand_rssi_for_display(self.rssi_db)
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(mhz, rssi, color="steelblue", linewidth=1.2)
-        ax.scatter(mhz, rssi, s=12, color="steelblue", zorder=3)
+        ax.scatter(self.mhz, self.rssi_db, s=20, color="steelblue", zorder=3)
         for adv_mhz in (2402, 2426, 2480):
             ax.axvline(adv_mhz, color="orange", alpha=0.35, linestyle="--")
+        ax.set_xlim(self.freq_base_mhz, self.freq_base_mhz + DISPLAY_COLUMNS - 1)
         ax.set_xlabel("Frequency [MHz]")
         ax.set_ylabel("RSSI [dBm]")
         ax.set_title(title or f"scan={self.scan_count}  dwell={self.dwell_us} us")
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         plt.show()
+
+
+class MaxHold:
+    """Running maximum RSSI per frequency bin (e.g. during watch)."""
+
+    def __init__(self, n: int = RSSI_CHANNELS) -> None:
+        self.rssi = np.full(n, _RSSI_MIN, dtype=int)
+        self.scan_at_max = np.full(n, -1, dtype=int)
+
+    def update(self, report: ScanReport) -> int:
+        """Merge report; return number of bins that set a new session maximum."""
+        n = min(len(self.rssi), len(report.rssi_db))
+        new_peaks = 0
+        for i in range(n):
+            v = int(report.rssi_db[i])
+            if v > self.rssi[i]:
+                self.rssi[i] = v
+                self.scan_at_max[i] = report.scan_count
+                new_peaks += 1
+        return new_peaks
+
+    @classmethod
+    def from_reports(cls, reports: list[ScanReport]) -> MaxHold:
+        hold = cls()
+        for r in reports:
+            hold.update(r)
+        return hold
 
 
 @click.group()
@@ -241,10 +377,19 @@ def cli() -> None:
 @click.option("--timeout", default=30.0, show_default=True, help="Seconds to wait for next report")
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
-def read(com: str, timeout: float, no_bars: bool, bar_height: int) -> None:
+@click.option("--track-max", is_flag=True, help="Show session-max markers (single scan)")
+def read(com: str, timeout: float, no_bars: bool, bar_height: int, track_max: bool) -> None:
     """Read one report from the device and print a summary."""
     r = ScanReport.from_com(com, timeout=timeout)
-    r.print_summary(show_bars=not no_bars, bar_height=bar_height)
+    hold = None
+    if track_max:
+        hold = MaxHold()
+        hold.update(r)
+    r.print_summary(
+        show_bars=not no_bars,
+        bar_height=bar_height,
+        max_hold=hold,
+    )
 
 
 @cli.command()
@@ -261,13 +406,15 @@ def read(com: str, timeout: float, no_bars: bool, bar_height: int) -> None:
 @click.option("--plot", "do_plot", is_flag=True, help="Show matplotlib window for each report")
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
+@click.option("--no-track-max", is_flag=True, help="Do not show per-frequency session max markers")
 def watch(com: str, save_dir: Optional[str], count: int, timeout: float, do_plot: bool,
-          no_bars: bool, bar_height: int) -> None:
+          no_bars: bool, bar_height: int, no_track_max: bool) -> None:
     """Stream reports as the device wakes and transmits."""
     if save_dir and not os.path.isdir(save_dir):
         os.makedirs(save_dir)
 
     n = 0
+    max_hold = MaxHold() if not no_track_max else None
     with serial.Serial(com, baudrate=115200, timeout=timeout) as ser:
         while count == 0 or n < count:
             try:
@@ -279,8 +426,14 @@ def watch(com: str, save_dir: Optional[str], count: int, timeout: float, do_plot
                 continue
 
             n += 1
+            new_peaks = max_hold.update(r) if max_hold is not None else 0
             console.rule(f"report {n}")
-            r.print_summary(show_bars=not no_bars, bar_height=bar_height)
+            r.print_summary(
+                show_bars=not no_bars,
+                bar_height=bar_height,
+                max_hold=max_hold,
+                new_peaks=new_peaks,
+            )
 
             if save_dir:
                 fname = f"{datetime.datetime.now().timestamp():.6f}.json"
@@ -319,7 +472,9 @@ def plot(filename: Optional[str], com: Optional[str], timeout: float,
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
 @click.option("--gui", is_flag=True, help="Open matplotlib window")
-def plot_dir(dirname: str, latest: bool, no_bars: bool, bar_height: int, gui: bool) -> None:
+@click.option("--track-max", is_flag=True, help="Overlay max-hold from all files in directory")
+def plot_dir(dirname: str, latest: bool, no_bars: bool, bar_height: int, gui: bool,
+             track_max: bool) -> None:
     """Show saved JSON spectrum reports from a directory."""
     files = sorted(glob.glob(os.path.join(dirname, "*.json")))
     if not files:
@@ -327,10 +482,19 @@ def plot_dir(dirname: str, latest: bool, no_bars: bool, bar_height: int, gui: bo
         return
     if latest:
         files = [files[-1]]
+
+    max_hold = None
+    if track_max and not latest:
+        reports = [ScanReport.from_file(p) for p in files]
+        max_hold = MaxHold.from_reports(reports)
+    elif track_max and latest:
+        max_hold = MaxHold()
+        max_hold.update(ScanReport.from_file(files[0]))
+
     for path in files:
         r = ScanReport.from_file(path)
         console.rule(os.path.basename(path))
-        r.print_summary(show_bars=not no_bars, bar_height=bar_height)
+        r.print_summary(show_bars=not no_bars, bar_height=bar_height, max_hold=max_hold)
         if gui:
             r.plot(title=os.path.basename(path))
 

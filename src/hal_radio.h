@@ -30,8 +30,6 @@ typedef struct {
     uint16_t ready_count;
 } hal_radio_scan_timing_t;
 
-void hal_clock_hfclk_start(void);
-void hal_clock_hfclk_stop(void);
 void hal_timer_init(void);
 uint32_t hal_time_us(void);
 void hal_radio_init(void);

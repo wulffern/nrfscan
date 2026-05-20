@@ -17,13 +17,21 @@ zephyr_get(SCAN_SETTLE_US)
 zephyr_get(SCAN_DISABLE_PERIOD_CH)
 zephyr_get(SCAN_RADIO_2MBIT)
 
+if(CONFIG_SOC_SERIES_NRF54L)
+  set(NRFSCAN_SOC_NRF54 1)
+else()
+  set(NRFSCAN_SOC_NRF54 0)
+endif()
+
 target_compile_definitions(app PRIVATE
   SCAN_INTERVAL_MS=${SCAN_INTERVAL_MS}
   SCAN_SETTLE_US=${SCAN_SETTLE_US}
   SCAN_DISABLE_PERIOD_CH=${SCAN_DISABLE_PERIOD_CH}
   SCAN_RADIO_2MBIT=${SCAN_RADIO_2MBIT}
+  NRFSCAN_SOC_NRF54=${NRFSCAN_SOC_NRF54}
 )
 target_sources(app PRIVATE
   src/main.c
   src/hal_radio.c
+  src/hal_platform.c
 )

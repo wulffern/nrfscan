@@ -3,12 +3,13 @@
 ######################################################################
 
 BOARD ?= nrf52833dk/nrf52833
+BOARD_54L15 ?= nrf54l15dk/nrf54l15/cpuapp
 SCAN_INTERVAL_MS ?= 500
 SCAN_SETTLE_US ?= 1
 SCAN_DISABLE_PERIOD_CH ?= 15
 SCAN_RADIO_2MBIT ?= 1
 
-TX_RADIO_2MBIT ?= 0
+TX_RADIO_2MBIT ?= 1
 TX_DWELL_MS ?= 1000
 
 build:
@@ -18,8 +19,14 @@ build:
 		-DSCAN_DISABLE_PERIOD_CH=$(SCAN_DISABLE_PERIOD_CH) \
 		-DSCAN_RADIO_2MBIT=$(SCAN_RADIO_2MBIT)
 
+build-54l15:
+	$(MAKE) build BOARD=$(BOARD_54L15)
+
 flash:
 	west flash
+
+tx-build-54l15:
+	$(MAKE) tx-build BOARD=$(BOARD_54L15)
 
 tx-build:
 	west build -b $(BOARD) -d build-tx tx -- \
@@ -37,4 +44,4 @@ config:
 	@grep -E 'SCAN_(INTERVAL|SETTLE|DISABLE|RADIO)' build/nrfscan/build.ninja 2>/dev/null | head -5 || \
 		echo "No build yet — run 'make build' first."
 
-.PHONY: build flash tx-build tx-flash clean config
+.PHONY: build build-54l15 flash tx-build tx-build-54l15 tx-flash clean config

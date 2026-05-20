@@ -9,6 +9,7 @@ import datetime
 import glob
 import json
 import os
+import sys
 import time
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ import click
 import matplotlib.pyplot as plt
 import numpy as np
 import serial
+import serial.tools.list_ports
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -57,6 +59,82 @@ def parse_json_line(raw: bytes) -> dict[str, Any]:
     if not line:
         raise ValueError("empty line")
     return json.loads(line.decode("utf-8"))
+
+
+def _cu_device(device: str) -> str:
+    """On macOS, prefer /dev/cu.* over /dev/tty.* for client access."""
+    if sys.platform == "darwin" and device.startswith("/dev/tty."):
+        cu = "/dev/cu." + device[len("/dev/tty.") :]
+        if os.path.exists(cu):
+            return cu
+    return device
+
+
+def ports_for_sid(sid: str) -> list[str]:
+    """All VCOM devices for a J-Link serial number (SID)."""
+    found: list[str] = []
+    for info in serial.tools.list_ports.comports():
+        if info.serial_number == sid:
+            found.append(_cu_device(info.device))
+    if not found:
+        for info in serial.tools.list_ports.comports():
+            if sid in (info.device or ""):
+                found.append(_cu_device(info.device))
+    return list(dict.fromkeys(found))
+
+
+def autodetect_nrfscan_port(sid: str, probe_timeout: float = 3.0) -> str:
+    """Return the VCOM that is sending nrfscan JSON lines."""
+    ports = ports_for_sid(sid)
+    if not ports:
+        raise click.UsageError(f"No USB serial port found for J-Link SID {sid!r}")
+
+    for port in ports:
+        try:
+            with serial.Serial(port, baudrate=115200, timeout=0.2) as ser:
+                buf = b""
+                deadline = time.time() + probe_timeout
+                while time.time() < deadline:
+                    chunk = ser.read(max(ser.in_waiting, 1))
+                    if not chunk:
+                        time.sleep(0.05)
+                        continue
+                    buf += chunk
+                    if b"rssi_dB" in buf or (b"{" in buf and b"}" in buf):
+                        console.print(f"[dim]Using {port} (nrfscan JSON)[/]")
+                        return port
+        except serial.SerialException:
+            continue
+
+    raise click.UsageError(
+        f"No nrfscan JSON on SID {sid!r} within {probe_timeout}s "
+        f"(tried {', '.join(ports)}). Reflash: make build-54l15 && make flash"
+    )
+
+
+def resolve_com(
+    com: Optional[str],
+    sid: Optional[str],
+    autodetect: bool,
+) -> str:
+    if com:
+        return _cu_device(com)
+    if not sid:
+        raise click.UsageError("Provide --com or --sid (J-Link serial number)")
+    if autodetect:
+        return autodetect_nrfscan_port(sid)
+    ports = ports_for_sid(sid)
+    if not ports:
+        raise click.UsageError(f"No USB serial port found for J-Link SID {sid!r}")
+    if len(ports) > 1:
+        console.print(
+            f"[yellow]SID {sid} has {len(ports)} VCOM interfaces: "
+            f"{', '.join(ports)}[/]"
+        )
+        console.print(
+            "[yellow]Using first; pass --com explicitly or use --autodetect[/]"
+        )
+    return ports[0]
 
 
 class ScanReport:
@@ -105,6 +183,13 @@ class ScanReport:
     def read_from_com(self, port: str, timeout: float = 30.0) -> None:
         with serial.Serial(port, baudrate=115200, timeout=timeout) as ser:
             raw = ser.readline()
+            if not raw:
+                extra = ser.read(max(ser.in_waiting, 1))
+                if extra:
+                    raise ValueError(
+                        f"no full line within {timeout}s; got {len(extra)} byte(s): {extra!r}"
+                    )
+                raise ValueError(f"no data within {timeout}s on {port}")
         self.obj = parse_json_line(raw)
 
     def save(self, path: str) -> None:
@@ -375,14 +460,45 @@ def cli() -> None:
     """Read and plot nrfscan UART JSON logs."""
 
 
+@cli.command("list-ports")
+@click.option(
+    "--sid",
+    default=None,
+    help="J-Link serial number (e.g. 001057706325); omit to list all ports",
+)
+def list_ports_cmd(sid: Optional[str]) -> None:
+    """List serial ports (optionally filtered by J-Link SID)."""
+    table = Table("device", "SID", "description")
+    for info in serial.tools.list_ports.comports():
+        if sid and info.serial_number != sid and sid not in (info.device or ""):
+            continue
+        table.add_row(_cu_device(info.device), info.serial_number or "", info.description or "")
+    console.print(table)
+
+
 @cli.command()
-@click.option("--com", required=True, help="Serial port (e.g. /dev/tty.usbmodem…)")
+@click.option("--com", default=None, help="Serial port (e.g. /dev/cu.usbmodem…)")
+@click.option("--sid", default=None, help="J-Link SID (e.g. 001057706325)")
+@click.option(
+    "--autodetect",
+    is_flag=True,
+    help="With --sid: pick the VCOM that sends nrfscan JSON",
+)
 @click.option("--timeout", default=30.0, show_default=True, help="Seconds to wait for next report")
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
 @click.option("--track-max", is_flag=True, help="Show session-max markers (single scan)")
-def read(com: str, timeout: float, no_bars: bool, bar_height: int, track_max: bool) -> None:
+def read(
+    com: Optional[str],
+    sid: Optional[str],
+    autodetect: bool,
+    timeout: float,
+    no_bars: bool,
+    bar_height: int,
+    track_max: bool,
+) -> None:
     """Read one report from the device and print a summary."""
+    com = resolve_com(com, sid, autodetect)
     r = ScanReport.from_com(com, timeout=timeout)
     hold = None
     if track_max:
@@ -396,7 +512,13 @@ def read(com: str, timeout: float, no_bars: bool, bar_height: int, track_max: bo
 
 
 @cli.command()
-@click.option("--com", required=True, help="Serial port")
+@click.option("--com", default=None, help="Serial port")
+@click.option("--sid", default=None, help="J-Link SID (e.g. 001057706325)")
+@click.option(
+    "--autodetect",
+    is_flag=True,
+    help="With --sid: pick the VCOM that sends nrfscan JSON",
+)
 @click.option(
     "--save",
     "save_dir",
@@ -410,9 +532,20 @@ def read(com: str, timeout: float, no_bars: bool, bar_height: int, track_max: bo
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
 @click.option("--no-track-max", is_flag=True, help="Do not show per-frequency session max markers")
-def watch(com: str, save_dir: Optional[str], count: int, timeout: float, do_plot: bool,
-          no_bars: bool, bar_height: int, no_track_max: bool) -> None:
+def watch(
+    com: Optional[str],
+    sid: Optional[str],
+    autodetect: bool,
+    save_dir: Optional[str],
+    count: int,
+    timeout: float,
+    do_plot: bool,
+    no_bars: bool,
+    bar_height: int,
+    no_track_max: bool,
+) -> None:
     """Stream reports as the device wakes and transmits."""
+    com = resolve_com(com, sid, autodetect or bool(sid))
     if save_dir and not os.path.isdir(save_dir):
         os.makedirs(save_dir)
 
@@ -451,19 +584,30 @@ def watch(com: str, save_dir: Optional[str], count: int, timeout: float, do_plot
 @cli.command()
 @click.option("--file", "filename", default=None, type=click.Path(dir_okay=False))
 @click.option("--com", default=None, help="Serial port (reads one report)")
+@click.option("--sid", default=None, help="J-Link SID (e.g. 001057706325)")
+@click.option("--autodetect", is_flag=True, help="With --sid: pick VCOM with nrfscan JSON")
 @click.option("--timeout", default=30.0, show_default=True)
 @click.option("--no-bars", is_flag=True, help="Skip terminal bar chart")
 @click.option("--bar-height", default=_BAR_HEIGHT_DEFAULT, show_default=True, help="Bar chart rows")
 @click.option("--gui", is_flag=True, help="Open matplotlib window")
-def plot(filename: Optional[str], com: Optional[str], timeout: float,
-         no_bars: bool, bar_height: int, gui: bool) -> None:
+def plot(
+    filename: Optional[str],
+    com: Optional[str],
+    sid: Optional[str],
+    autodetect: bool,
+    timeout: float,
+    no_bars: bool,
+    bar_height: int,
+    gui: bool,
+) -> None:
     """Show RSSI spectrum from a file or one live reading."""
-    if com:
+    if com or sid:
+        com = resolve_com(com, sid, autodetect or bool(sid))
         r = ScanReport.from_com(com, timeout=timeout)
     elif filename:
         r = ScanReport.from_file(filename)
     else:
-        raise click.UsageError("Provide --file or --com")
+        raise click.UsageError("Provide --file or --com / --sid")
     r.print_summary(show_bars=not no_bars, bar_height=bar_height)
     if gui:
         r.plot(title=os.path.basename(filename) if filename else None)

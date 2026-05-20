@@ -63,25 +63,15 @@ static bool radio_pll_reload_rxen(hal_radio_scan_timing_t *timing)
 
     t0 = hal_time_us();
     NRF_RADIO->TASKS_PLLEN = 1;
-    //if (!hal_radio_wait_event(&NRF_RADIO->EVENTS_PLLREADY, RADIO_PLLREADY_TIMEOUT_US)) {
-    //    NRF_RADIO->SHORTS = 0;
-    //    timing->ready_us += hal_time_us() - t0;
-    //    timing->ready_count++;
-    //    return false;
-    // }
+    if (!hal_radio_wait_event(&NRF_RADIO->EVENTS_RXREADY, RADIO_PLLREADY_TIMEOUT_US)) {
+        NRF_RADIO->SHORTS = 0;
+        timing->ready_us += hal_time_us() - t0;
+        timing->ready_count++;
+        return false;
+    }
     timing->ready_us += hal_time_us() - t0;
     timing->ready_count++;
 
-    //NRF_RADIO->SHORTS = 0;
-
-    //t0 = hal_time_us();
-    //if (!hal_radio_wait_event(&NRF_RADIO->EVENTS_RXREADY, RADIO_RXREADY_TIMEOUT_US)) {
-    //    timing->ready_us += hal_time_us() - t0;
-    //    timing->ready_count++;
-    //    return false;
-    //}
-    //timing->ready_us += hal_time_us() - t0;
-    //timing->ready_count++;
     return true;
 }
 
@@ -91,16 +81,11 @@ static int8_t radio_measure_channel(uint8_t channel, hal_radio_scan_timing_t *ti
 
     radio_channel_set_nrf54(channel);
 
+
     if (!radio_pll_reload_rxen(timing)) {
         return (int8_t)-127;
     }
 
-    t0 = hal_time_us();
-    hal_radio_wait_us(RADIO_SETTLE_US);
-    timing->settle_us += hal_time_us() - t0;
-
-
-    //  hal_radio_wait_us(30);
 
     t0 = hal_time_us();
     const int8_t rssi = hal_radio_rssi_sample();
@@ -115,7 +100,7 @@ void hal_radio_scan_channels(int8_t *rssi_dbm, hal_radio_scan_timing_t *timing)
 
         hal_radio_channel_set(0);
     radio_constlat_enable();
-    NRF_RADIO->TASKS_RXEN = 0x1;
+    NRF_RADIO->TASKS_PLLEN = 0x1;
     hal_radio_wait_us(40);
     NRF_RADIO->TASKS_START = 1;
     hal_radio_wait_us(5);

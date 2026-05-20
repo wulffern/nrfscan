@@ -3,6 +3,7 @@
  ********************************************************************/
 
 #include "hal_radio_internal.h"
+#include "hal_platform.h"
 #include "hal_soc.h"
 #include <mdk/nrf.h>
 
@@ -83,6 +84,7 @@ void hal_radio_scan_begin(hal_radio_scan_timing_t *timing, int8_t *rssi_dbm)
 {
     (void)rssi_dbm;
 
+    timing->hfclk_us = 0;
     timing->disable_us = 0;
     timing->ready_us = 0;
     timing->settle_us = 0;
@@ -90,6 +92,10 @@ void hal_radio_scan_begin(hal_radio_scan_timing_t *timing, int8_t *rssi_dbm)
     timing->final_disable_us = 0;
     timing->disable_count = 0;
     timing->ready_count = 0;
+
+    const uint32_t t0 = hal_time_us();
+    hal_clock_hfclk_start();
+    timing->hfclk_us = hal_time_us() - t0;
 
     NRF_RADIO->PACKETPTR = (uint32_t)rx_packet;
 }
@@ -124,4 +130,5 @@ void hal_radio_scan_rssi(int8_t *rssi_dbm, hal_radio_scan_timing_t *timing)
     hal_radio_scan_begin(timing, rssi_dbm);
     hal_radio_scan_channels(rssi_dbm, timing);
     hal_radio_scan_end(timing);
+    hal_clock_hfclk_stop();
 }

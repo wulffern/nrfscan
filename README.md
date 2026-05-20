@@ -18,7 +18,7 @@ Per bin: `FREQUENCY` → settle → `RSSISTART` (BLE **2 Mbps**).
 
 | SoC | Sweep |
 |-----|--------|
-| nRF54L15 / LM20 | HFCLK via `z_nrf_clock_bt_ctlr_hf_request()` (same as BLE LL). Per bin: `FREQUENCY` → `PLLEN` → `PLLREADY` → `RXEN` → `RXREADY` → `START` → RSSI. BLE 2M + DTM-style PCNF (no whitening). |
+| nRF54L15 / LM20 | HFXO via `TASKS_XOSTART`/`TASKS_XOSTOP` (off between scans). Interval sleep: GRTC compare + `WFE`. Per bin: `FREQUENCY` → `PLLEN` → `PLLREADY` → `RXEN` → `RXREADY` → `START` → RSSI. BLE 2M + DTM-style PCNF (no whitening). |
 | nRF52833 | Same, plus periodic `DISABLE`+`RXEN` every `SCAN_DISABLE_PERIOD_CH` bins |
 
 ## Build
@@ -59,14 +59,14 @@ Example (one line terminated with `\n\r` like initiator):
 | Field | Meaning |
 |-------|---------|
 | `rssi_dB` | Max RSSI per bin; MHz = `freq_base_mhz` + index × `freq_step_mhz` |
-| `scan_duration_us` | RSSI sweep with HFCLK on (TIMER1, excludes HFCLK startup) |
-| `time_hfclk_us` | HFCLK startup before the sweep |
+| `scan_duration_us` | Wall time of `hal_radio_scan_rssi` (HFCLK + sweep + final disable) |
+| `time_hfclk_us` | HFCLK request/wait at sweep start (`hal_radio_scan_begin`) |
 | `time_ready_us` | Waiting for RADIO `READY` (first bin + each disable hop) |
 | `time_disable_us` | `DISABLE` → `DISABLED` → auto `RXEN` hops |
 | `time_settle_us` | Busy-wait after RX (`SCAN_SETTLE_US` per bin) |
 | `time_rssi_us` | `RSSISTART` → `RSSIEND` per bin |
 | `time_final_disable_us` | Radio off after the last bin |
-| `time_other_us` | `scan_duration_us` minus the sum of the sweep phases above |
+| `time_other_us` | `scan_duration_us` minus HFCLK and all sweep phases above |
 | `count_ready` / `count_disable` | How often each path ran |
 | `channels` | Bin count (40 or 80) |
 | `freq_base_mhz` | First bin frequency (2400) |

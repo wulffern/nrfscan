@@ -19,8 +19,9 @@
 #define RSSI_CHANNEL_COUNT 80
 #endif
 
-/** Cumulative microseconds inside hal_radio_scan_rssi (TIMER1). */
+/** Cumulative microseconds inside hal_radio_scan_rssi (scan timer). */
 typedef struct {
+    uint32_t hfclk_us;
     uint32_t disable_us;
     uint32_t ready_us;
     uint32_t settle_us;

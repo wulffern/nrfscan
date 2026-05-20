@@ -90,18 +90,18 @@ static void int8_array_to_json(const char *key, const int8_t *array, uint32_t le
     uart_put_string("]");
 }
 
-static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t scan_duration_us, uint32_t hfclk_us,
+static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t scan_duration_us,
                                 const hal_radio_scan_timing_t *timing, uint32_t scan_count)
 {
-    const uint32_t sweep_accounted = timing->disable_us + timing->ready_us + timing->settle_us +
-                                     timing->rssi_us + timing->final_disable_us;
+    const uint32_t sweep_accounted = timing->hfclk_us + timing->disable_us + timing->ready_us +
+                                     timing->settle_us + timing->rssi_us + timing->final_disable_us;
 
     uart_put_string("{");
     int8_array_to_json("rssi_dB", rssi_dbm, RSSI_CHANNEL_COUNT);
     uart_put_string(",");
     int_to_json("scan_duration_us", (int)scan_duration_us);
     uart_put_char(',');
-    int_to_json("time_hfclk_us", (int)hfclk_us);
+    int_to_json("time_hfclk_us", (int)timing->hfclk_us);
     uart_put_char(',');
     int_to_json("time_ready_us", (int)timing->ready_us);
     uart_put_char(',');
@@ -137,17 +137,12 @@ static void scan_report_to_json(const int8_t *rssi_dbm, uint32_t scan_duration_u
     uart_put_string("}\n\r");
 }
 
-static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us, uint32_t *hfclk_us,
-                         hal_radio_scan_timing_t *timing)
+static void run_one_scan(int8_t *rssi_dbm, uint32_t *duration_us, hal_radio_scan_timing_t *timing)
 {
-    const uint32_t hfclk_start = hal_time_us();
-    hal_clock_hfclk_start();
-    *hfclk_us = hal_time_us() - hfclk_start;
-
     const uint32_t scan_start = hal_time_us();
+
     hal_radio_scan_rssi(rssi_dbm, timing);
     *duration_us = hal_time_us() - scan_start;
-    hal_clock_hfclk_stop();
 }
 
 int main(void)
@@ -163,12 +158,11 @@ int main(void)
 
     while (1) {
         uint32_t duration_us = 0;
-        uint32_t hfclk_us = 0;
         hal_radio_scan_timing_t timing;
 
         scan_count++;
-        run_one_scan(rssi_dbm, &duration_us, &hfclk_us, &timing);
-        scan_report_to_json(rssi_dbm, duration_us, hfclk_us, &timing, scan_count);
+        run_one_scan(rssi_dbm, &duration_us, &timing);
+        scan_report_to_json(rssi_dbm, duration_us, &timing, scan_count);
 
         hal_interval_wait_ms(SCAN_INTERVAL_MS);
     }

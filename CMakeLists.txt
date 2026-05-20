@@ -32,6 +32,11 @@ target_compile_definitions(app PRIVATE
 )
 target_sources(app PRIVATE
   src/main.c
-  src/hal_radio.c
+  src/hal_radio_common.c
   src/hal_platform.c
 )
+if(CONFIG_SOC_SERIES_NRF54L)
+  target_sources(app PRIVATE src/hal_radio_nrf54.c)
+else()
+  target_sources(app PRIVATE src/hal_radio_nrf52.c)
+endif()
